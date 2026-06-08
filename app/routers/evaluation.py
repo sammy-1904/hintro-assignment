@@ -19,7 +19,7 @@ async def evaluation():
             "candidateName": "Sameer Rawat",
             "email": "sameerrawat1904@gmail.com",
             "repositoryUrl": "https://github.com/sammy-1904/hintro-assignment",
-            "deployedUrl": "https://hintro-assignment.onrender.com",
+            "deployedUrl": "https://hintro-assignment-emb9.onrender.com",
             "externalIntegration": "Email via Resend (https://resend.com)",
             "features": [
                 "JWT Authentication (register + login)",
