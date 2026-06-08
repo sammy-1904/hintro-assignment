@@ -1,5 +1,7 @@
 from collections.abc import AsyncGenerator
 
+from sqlalchemy import JSON
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -24,6 +26,10 @@ AsyncSessionLocal = async_sessionmaker(
 class Base(DeclarativeBase):
     """All ORM models inherit from this base."""
     pass
+
+
+# SQLite doesn't support JSONB, so we use JSON with a variant for PostgreSQL
+JSON_TYPE = JSON().with_variant(JSONB, "postgresql")
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:

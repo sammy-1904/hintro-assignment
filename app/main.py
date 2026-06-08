@@ -1,14 +1,16 @@
 """
-Hintro Meeting Intelligence Service
+Hintro Meeting Intelligence Service (Reloaded for .env change)
 ====================================
 FastAPI application entry point.
 
 Startup sequence:
   1. Configure structured logging
-  2. Create DB tables (dev convenience — use Alembic in production)
-  3. Register middleware (CORS → TraceID)
-  4. Register exception handlers
-  5. Mount routers
+  2. Import all models (ensures create_all sees every table)
+  3. Create DB tables
+  4. Start background scheduler (overdue action item reminders)
+  5. Register middleware: CORS → TraceID
+  6. Register global exception handlers
+  7. Mount all routers
 """
 
 import logging
@@ -20,25 +22,34 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.database import Base, engine
+
+# Import all models so Base.metadata.create_all() knows about every table
+import app.models  # noqa: F401
+
 from app.middleware.trace import TraceMiddleware
 from app.routers.auth import router as auth_router
 from app.routers.health import router as health_router
+from app.routers.meetings import router as meetings_router
+from app.routers.action_items import router as action_items_router
+from app.routers.evaluation import router as evaluation_router
+from app.services.scheduler import start_scheduler, stop_scheduler
 from app.utils.errors import register_exception_handlers
 
-# ── Structured Logging ────────────────────────────────────────────────────────
+# ── Logging ───────────────────────────────────────────────────────────────────
+
 LOGGING_CONFIG: dict = {
     "version": 1,
     "disable_existing_loggers": False,
     "formatters": {
-        "standard": {
-            "format": "[%(asctime)s] %(levelname)-8s %(name)s | %(message)s",
+        "structured": {
+            "()": "app.middleware.trace.StructuredFormatter",
             "datefmt": "%Y-%m-%dT%H:%M:%S",
         },
     },
     "handlers": {
         "console": {
             "class": "logging.StreamHandler",
-            "formatter": "standard",
+            "formatter": "structured",
             "stream": "ext://sys.stdout",
         },
     },
@@ -52,26 +63,35 @@ logger = logging.getLogger(__name__)
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Run startup and shutdown logic."""
     logger.info("Starting %s", settings.APP_NAME)
+
+    # Create all DB tables (idempotent — safe to run on every startup)
     async with engine.begin() as conn:
-        # Create tables that don't exist yet (idempotent)
         await conn.run_sync(Base.metadata.create_all)
-    logger.info("Database ready")
-    yield
-    logger.info("Shutting down — disposing DB connections")
+    logger.info("Database tables ready")
+
+    # Start background reminder scheduler
+    start_scheduler()
+
+    yield  # ← Server is running
+
+    # Shutdown
+    stop_scheduler()
     await engine.dispose()
+    logger.info("Shutdown complete")
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
+
 app = FastAPI(
     title=settings.APP_NAME,
     description=(
-        "AI-powered meeting intelligence service. "
-        "Manages meetings, extracts insights from transcripts, "
-        "tracks action items, and sends overdue reminders."
+        "AI-powered meeting intelligence service. Manages meetings, extracts "
+        "grounded insights from transcripts, tracks action items, and sends "
+        "overdue reminders via email."
     ),
     version="1.0.0",
     lifespan=lifespan,
@@ -79,7 +99,11 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# ── Middleware (order matters — outermost added last) ─────────────────────────
+# ── Middleware ────────────────────────────────────────────────────────────────
+# Note: add_middleware registers in LIFO order (last added = outermost = runs first).
+# We want: TraceMiddleware → CORSMiddleware → route handler
+# So add CORS first (inner), then Trace (outer).
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -90,8 +114,13 @@ app.add_middleware(
 app.add_middleware(TraceMiddleware)
 
 # ── Exception Handlers ────────────────────────────────────────────────────────
+
 register_exception_handlers(app)
 
 # ── Routers ───────────────────────────────────────────────────────────────────
+
 app.include_router(health_router)
+app.include_router(evaluation_router)
 app.include_router(auth_router)
+app.include_router(meetings_router)
+app.include_router(action_items_router)

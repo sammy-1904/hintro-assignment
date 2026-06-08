@@ -56,3 +56,45 @@ class TraceMiddleware(BaseHTTPMiddleware):
 
         _trace_id_var.reset(token)
         return response
+
+
+class StructuredFormatter(logging.Formatter):
+    """
+    Format logs as JSON objects containing:
+      - timestamp
+      - level
+      - logger name
+      - message
+      - traceId (retrieved from current ContextVar)
+      - method, path, status, code, detail (if present in extra)
+      - exception details (if present)
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        import json
+
+        # Retrieve traceId from ContextVar, fallback to record attr, then empty
+        trace_id = get_trace_id()
+        if not trace_id and hasattr(record, "traceId"):
+            trace_id = getattr(record, "traceId")
+        if not trace_id:
+            trace_id = "N/A"
+
+        log_data = {
+            "timestamp": self.formatTime(record, self.datefmt),
+            "level": record.levelname,
+            "name": record.name,
+            "message": record.getMessage(),
+            "traceId": trace_id,
+        }
+
+        # Include custom request/error details if present
+        for key in ["method", "path", "status", "code", "detail"]:
+            if hasattr(record, key):
+                log_data[key] = getattr(record, key)
+
+        # Include traceback details if an exception occurred
+        if record.exc_info:
+            log_data["exception"] = self.formatException(record.exc_info)
+
+        return json.dumps(log_data)
